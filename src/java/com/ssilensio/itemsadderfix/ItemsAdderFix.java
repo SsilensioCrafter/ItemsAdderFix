@@ -28,6 +28,7 @@ public final class ItemsAdderFix extends JavaPlugin {
     private final Gson gson = new Gson();
     private ProtocolManager protocolManager;
     private PacketAdapter listener;
+    private boolean logFixes;
 
     @Override
     public void onEnable() {
@@ -36,6 +37,10 @@ public final class ItemsAdderFix extends JavaPlugin {
             getServer().getPluginManager().disablePlugin(this);
             return;
         }
+
+        saveDefaultConfig();
+        reloadConfig();
+        logFixes = getConfig().getBoolean("log-fixes", true);
 
         protocolManager = ProtocolLibrary.getProtocolManager();
         PacketType[] monitoredTypes = collectServerPlayPackets();
@@ -208,8 +213,10 @@ public final class ItemsAdderFix extends JavaPlugin {
             JsonElement idElement = tooltip.get("id");
             String uuidString = extractUuid(idElement);
             if (uuidString != null) {
+                String original = gson.toJson(idElement);
                 tooltip.addProperty("id", uuidString);
                 changed = true;
+                logFix(original, uuidString);
             }
         }
 
@@ -301,5 +308,12 @@ public final class ItemsAdderFix extends JavaPlugin {
             System.out.println(line);
         }
         System.out.println();
+    }
+
+    private void logFix(String before, String after) {
+        if (!logFixes) {
+            return;
+        }
+        getLogger().info(() -> "Normalized hoverEvent entity id from XML payload " + before + " to " + after + ".");
     }
 }
