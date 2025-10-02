@@ -16,7 +16,7 @@ This plugin intercepts every outgoing Play packet through ProtocolLib with the l
 ```bash
 mvn package
 ```
-The shaded jar will be produced in `target/itemsadderfix-1.0.0-shaded.jar` with Gson relocated to `com.ssilensio.itemsadderfix.libs.gson` to avoid dependency clashes.
+The shaded jar will be produced in `target/ItemsAdderFix.jar` with Gson relocated to `com.ssilensio.itemsadderfix.libs.gson` to avoid dependency clashes.
 
 ## Installation
 1. Place the generated jar into your server's `plugins/` folder.
@@ -24,15 +24,38 @@ The shaded jar will be produced in `target/itemsadderfix-1.0.0-shaded.jar` with 
 3. Start or reload the server. The console will confirm that hover event normalization is active.
 
 ## Configuration
-ItemsAdderFix ships with a minimal configuration file located at `plugins/ItemsAdderFix/config.yml`:
+ItemsAdderFix ships with an expanded configuration file located at `plugins/ItemsAdderFix/config.yml`:
 
 ```yaml
-# Configuration for ItemsAdderFix
-# Set to true to log every time the hover event UUID normalization alters XML payloads.
-log-fixes: true
+# ItemsAdderFix configuration
+# This file describes how the plugin processes hover event payloads emitted by vanilla packets.
+#
+# enabled - Master toggle. When set to false the plugin stops registering any listeners.
+# debug - Emits informational log messages when payloads are normalized.
+# logging.handled_errors.* - Controls the XML audit log produced inside the plugin data folder.
+# normalization.hover_event_uuid.* - Fine-tunes how legacy hover event payloads are converted.
+enabled: true
+debug: false
+logging:
+  handled_errors:
+    enabled: true
+    file: handled-errors.xml
+    include_original_payload: true
+    include_normalized_payload: true
+normalization:
+  hover_event_uuid:
+    enabled: true
+    convert:
+      int_array: true
+      uuid_object: true
 ```
 
-When `log-fixes` is enabled, normalized payload pairs are appended to `plugins/ItemsAdderFix/handled-errors.xml` so you can audit what the plugin adjusted. Malformed or empty payload data is ignored, ensuring the XML only tracks genuine fixes. Set the value to `false` if you do not want the XML log to be updated.
+- Disable `enabled` to keep the plugin installed without registering any listeners.
+- Set `debug` to `true` to see informational messages whenever ItemsAdderFix rewrites a UUID.
+- Tweak `logging.handled_errors.*` to choose whether normalization events are persisted to the XML audit log, which fields are captured, and which filename should be used.
+- Control what legacy UUID representations are normalized through `normalization.hover_event_uuid.convert`.
+
+When handled error logging is active, normalized payload pairs are appended to the configured XML file so you can audit what the plugin adjusted. Malformed or empty payload data is ignored, ensuring the XML only tracks genuine fixes.
 
 ## How it works
 - Registers a ProtocolLib listener with `ListenerPriority.LOWEST`, guaranteeing the fix runs before ItemsAdder's own listeners.
@@ -40,4 +63,4 @@ When `log-fixes` is enabled, normalized payload pairs are appended to `plugins/I
 - Rewrites `hoverEvent:show_entity` payloads that carry legacy UUID formats (int arrays or `{most,least}` objects) into standard UUID strings.
 - Leaves already valid payloads untouched.
 
-No game mechanics are changed and no configuration options are added—this plugin simply prevents the `JsonSyntaxException` spam and crashes triggered by malformed hover event data.
+No game mechanics are changed—this plugin simply prevents the `JsonSyntaxException` spam and crashes triggered by malformed hover event data while giving you control over how aggressively it logs and normalizes payloads.

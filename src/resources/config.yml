@@ -1,3 +1,22 @@
-# Configuration for ItemsAdderFix
-# Set to true to log every time the hover event UUID normalization alters XML payloads.
-log-fixes: true
+# ItemsAdderFix configuration
+# This file describes how the plugin processes hover event payloads emitted by vanilla packets.
+#
+# enabled - Master toggle. When set to false the plugin stops registering any listeners.
+# debug - Emits informational log messages when payloads are normalized.
+# logging.handled_errors.* - Controls the XML audit log produced inside the plugin data folder.
+# normalization.hover_event_uuid.* - Fine-tunes how legacy hover event payloads are converted.
+enabled: true
+debug: false
+logging:
+  handled_errors:
+    enabled: true
+    file: handled-errors.xml
+    include_original_payload: true
+    include_normalized_payload: true
+normalization:
+  hover_event_uuid:
+    enabled: true
+    convert:
+      int_array: true
+      uuid_object: true
+
