@@ -23,6 +23,17 @@ The shaded jar will be produced in `target/itemsadderfix-1.0.0-shaded.jar` with 
 2. Ensure ProtocolLib is installed and updated to 5.3.0 or newer.
 3. Start or reload the server. The console will confirm that hover event normalization is active.
 
+## Configuration
+ItemsAdderFix ships with a minimal configuration file located at `plugins/ItemsAdderFix/config.yml`:
+
+```yaml
+# Configuration for ItemsAdderFix
+# Set to true to log every time the hover event UUID normalization alters XML payloads.
+log-fixes: true
+```
+
+When `log-fixes` is enabled, normalized payload pairs are appended to `plugins/ItemsAdderFix/handled-errors.xml` so you can audit what the plugin adjusted. Set the value to `false` if you do not want the XML log to be updated.
+
 ## How it works
 - Registers a ProtocolLib listener with `ListenerPriority.LOWEST`, guaranteeing the fix runs before ItemsAdder's own listeners.
 - Scans chat components in outgoing packets.
