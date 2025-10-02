@@ -50,6 +50,16 @@ public final class ItemsAdderFix extends JavaPlugin {
     private boolean logFixes;
     private File handledErrorsFile;
     private final Object handledErrorsLock = new Object();
+    private static final String ANSI_BOLD = "\u001B[1m";
+    private static final String ANSI_RESET = "\u001B[0m";
+    private static final String[] BANNER_LINES = {
+            "███████   █████       ███████  ███████  ███ ███",
+            "  ███    ███ ███      ███        ███     ████ ",
+            "  ███    ███████      ██████     ███      ███ ",
+            "  ███    ███ ███      ███        ███     ████ ",
+            "███████  ███ ███      ███      ███████  ███ ███",
+            ANSI_BOLD + "IA FIX" + ANSI_RESET
+    };
 
     @Override
     public void onEnable() {
@@ -83,7 +93,6 @@ public final class ItemsAdderFix extends JavaPlugin {
 
         protocolManager.addPacketListener(listener);
         printBanner();
-        getLogger().info("ItemsAdderFix enabled. Hover event UUID normalization active.");
     }
 
     @Override
@@ -316,26 +325,17 @@ public final class ItemsAdderFix extends JavaPlugin {
     }
 
     private void printBanner() {
-        String[] lines = {
-                "███████   █████       ███████  ███████  ███ ███",
-                "  ███    ███ ███      ███        ███     ████ ",
-                "  ███    ███████      ██████     ███      ███ ",
-                "  ███    ███ ███      ███        ███     ████ ",
-                "███████  ███ ███      ███      ███████  ███ ███"
-        };
-
         System.out.println();
-        for (String line : lines) {
+        for (String line : BANNER_LINES) {
             System.out.println(line);
         }
         System.out.println();
     }
 
     private void logFix(String before, String after) {
-        if (!logFixes || handledErrorLogger == null) {
+        if (!logFixes || handledErrorsFile == null) {
             return;
         }
-        getLogger().info(() -> "Normalized hoverEvent entity id from XML payload " + before + " to " + after + ".");
         writeHandledError(before, after);
     }
 
