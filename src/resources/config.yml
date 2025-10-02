@@ -1,0 +1,3 @@
+# Configuration for ItemsAdderFix
+# Set to true to log every time the hover event UUID normalization alters XML payloads.
+log-fixes: true
