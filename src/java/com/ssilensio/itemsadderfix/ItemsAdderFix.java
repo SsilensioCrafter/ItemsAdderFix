@@ -65,8 +65,7 @@ public final class ItemsAdderFix extends JavaPlugin {
             "  ███    ███ ███      ███        ███     ████ ",
             "  ███    ███████      ██████     ███      ███ ",
             "  ███    ███ ███      ███        ███     ████ ",
-            "███████  ███ ███      ███      ███████  ███ ███",
-            ANSI_BOLD + "IA FIX" + ANSI_RESET
+            ANSI_BOLD + "███████  ███ ███      ███      ███████  ███ ███" + ANSI_RESET
     };
 
     @Override
@@ -377,6 +376,9 @@ public final class ItemsAdderFix extends JavaPlugin {
 
     private void logFix(String before, String after) {
         if (!logFixes || handledErrorsFile == null) {
+            return;
+        }
+        if (!includeOriginalPayload && !includeNormalizedPayload) {
             return;
         }
         writeHandledError(before, after);
