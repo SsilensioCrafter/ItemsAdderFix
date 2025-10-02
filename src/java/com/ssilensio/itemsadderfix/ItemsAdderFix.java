@@ -17,6 +17,13 @@ import com.google.gson.JsonPrimitive;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.time.Instant;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -29,6 +36,8 @@ public final class ItemsAdderFix extends JavaPlugin {
     private ProtocolManager protocolManager;
     private PacketAdapter listener;
     private boolean logFixes;
+    private Path handledErrorsFile;
+    private final Object handledErrorsLock = new Object();
 
     @Override
     public void onEnable() {
@@ -41,6 +50,7 @@ public final class ItemsAdderFix extends JavaPlugin {
         saveDefaultConfig();
         reloadConfig();
         logFixes = getConfig().getBoolean("log-fixes", true);
+        handledErrorsFile = initializeHandledErrorsLog();
 
         protocolManager = ProtocolLibrary.getProtocolManager();
         PacketType[] monitoredTypes = collectServerPlayPackets();
@@ -51,6 +61,7 @@ public final class ItemsAdderFix extends JavaPlugin {
                     normalizePacket(event.getPacket());
                 } catch (Exception ex) {
                     getLogger().log(Level.SEVERE, "Failed to normalize packet " + event.getPacketType(), ex);
+                    logHandledError(event.getPacketType().name(), ex);
                 }
             }
         };
@@ -294,13 +305,13 @@ public final class ItemsAdderFix extends JavaPlugin {
         final String primary = "\u001B[38;5;219m";
         final String accent = "\u001B[38;5;39m";
         String[] lines = {
-                primary + "██╗██╗   ██╗███████╗██╗██╗  ██╗" + reset,
-                primary + "██║██║   ██║██╔════╝██║██║ ██╔╝" + reset,
-                accent + "██║██║   ██║█████╗  ██║█████╔╝ " + reset,
-                accent + "██║╚██╗ ██╔╝██╔══╝  ██║██╔═██╗ " + reset,
-                primary + "██║ ╚████╔╝ ███████╗██║██║  ██╗" + reset,
-                primary + "╚═╝  ╚═══╝  ╚══════╝╚═╝╚═╝  ╚═╝" + reset,
-                accent + "           I A F I X" + reset
+                primary + "███████╗ ███╗   ███╗ ███████╗ ██╗ ██╗  ██╗" + reset,
+                primary + "╚══███╔╝ ████╗ ████║ ██╔════╝ ██║ ╚██╗██╔╝" + reset,
+                accent + "  ███╔╝  ██╔████╔██║ █████╗   ██║  ╚███╔╝ " + reset,
+                accent + " ███╔╝   ██║╚██╔╝██║ ██╔══╝   ██║   ██╔██╗ " + reset,
+                primary + "███████╗ ██║ ╚═╝ ██║ ██║      ██║  ██╔╝ ██╗" + reset,
+                primary + "╚══════╝ ╚═╝     ╚═╝ ╚═╝      ╚═╝  ╚═╝  ╚═╝" + reset,
+                accent + "            Z M F I X" + reset
         };
 
         System.out.println();
@@ -315,5 +326,102 @@ public final class ItemsAdderFix extends JavaPlugin {
             return;
         }
         getLogger().info(() -> "Normalized hoverEvent entity id from XML payload " + before + " to " + after + ".");
+    }
+
+    private Path initializeHandledErrorsLog() {
+        try {
+            if (!getDataFolder().exists() && !getDataFolder().mkdirs()) {
+                getLogger().warning("Failed to create plugin data folder for handled error log.");
+                return null;
+            }
+
+            Path file = getDataFolder().toPath().resolve("handled-errors.xml");
+            if (Files.notExists(file)) {
+                List<String> initialContent = List.of(
+                        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
+                        "<errors>",
+                        "</errors>"
+                );
+                Files.write(file, initialContent, StandardCharsets.UTF_8, StandardOpenOption.CREATE_NEW);
+            }
+            return file;
+        } catch (IOException ex) {
+            getLogger().log(Level.SEVERE, "Failed to initialize handled-errors.xml log file.", ex);
+            return null;
+        }
+    }
+
+    private void logHandledError(String packetType, Exception exception) {
+        if (handledErrorsFile == null) {
+            return;
+        }
+
+        synchronized (handledErrorsLock) {
+            try {
+                List<String> lines = Files.readAllLines(handledErrorsFile, StandardCharsets.UTF_8);
+                if (lines.isEmpty()) {
+                    lines = new ArrayList<>();
+                    lines.add("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
+                    lines.add("<errors>");
+                    lines.add("</errors>");
+                }
+
+                int closingIndex = findClosingIndex(lines);
+                if (closingIndex < 0) {
+                    lines.add("</errors>");
+                    closingIndex = lines.size() - 1;
+                }
+
+                String entry = buildErrorEntry(packetType, exception);
+                lines.add(closingIndex, entry);
+                Files.write(handledErrorsFile, lines, StandardCharsets.UTF_8, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+            } catch (IOException ioException) {
+                getLogger().log(Level.SEVERE, "Failed to append to handled-errors.xml log file.", ioException);
+            }
+        }
+    }
+
+    private int findClosingIndex(List<String> lines) {
+        for (int i = lines.size() - 1; i >= 0; i--) {
+            if (lines.get(i).trim().equals("</errors>")) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private String buildErrorEntry(String packetType, Exception exception) {
+        String timestamp = DateTimeFormatter.ISO_INSTANT.format(Instant.now());
+        StringBuilder builder = new StringBuilder();
+        builder.append("    <error timestamp=\"").append(timestamp).append("\" packet=\"").append(packetType).append("\">");
+        builder.append(System.lineSeparator());
+        builder.append("        <message>").append(escapeXml(exception.getMessage())).append("</message>");
+        builder.append(System.lineSeparator());
+        builder.append("        <stacktrace>");
+        builder.append(escapeXml(getStackTrace(exception)));
+        builder.append("</stacktrace>");
+        builder.append(System.lineSeparator());
+        builder.append("    </error>");
+        return builder.toString();
+    }
+
+    private String getStackTrace(Exception exception) {
+        StringBuilder builder = new StringBuilder();
+        for (StackTraceElement element : exception.getStackTrace()) {
+            builder.append(element.toString()).append(System.lineSeparator());
+        }
+        return builder.toString().trim();
+    }
+
+    private String escapeXml(String value) {
+        if (value == null || value.isEmpty()) {
+            return "";
+        }
+        return value
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\"", "&quot;")
+                .replace("'", "&apos;");
     }
 }
