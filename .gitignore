@@ -1,0 +1,5 @@
+# Build output
+/target/
+
+# Local Maven archive
+/apache-maven-3.9.9-bin.tar.gz
