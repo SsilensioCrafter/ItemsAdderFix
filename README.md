@@ -32,7 +32,7 @@ ItemsAdderFix ships with a minimal configuration file located at `plugins/ItemsA
 log-fixes: true
 ```
 
-When `log-fixes` is enabled, normalized payload pairs are appended to `plugins/ItemsAdderFix/handled-errors.xml` so you can audit what the plugin adjusted. Set the value to `false` if you do not want the XML log to be updated.
+When `log-fixes` is enabled, normalized payload pairs are appended to `plugins/ItemsAdderFix/handled-errors.xml` so you can audit what the plugin adjusted. Malformed or empty payload data is ignored, ensuring the XML only tracks genuine fixes. Set the value to `false` if you do not want the XML log to be updated.
 
 ## How it works
 - Registers a ProtocolLib listener with `ListenerPriority.LOWEST`, guaranteeing the fix runs before ItemsAdder's own listeners.
