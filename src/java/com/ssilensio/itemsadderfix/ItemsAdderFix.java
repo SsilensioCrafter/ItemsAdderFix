@@ -332,7 +332,7 @@ public final class ItemsAdderFix extends JavaPlugin {
     }
 
     private void logFix(String before, String after) {
-        if (!logFixes) {
+        if (!logFixes || handledErrorLogger == null) {
             return;
         }
         getLogger().info(() -> "Normalized hoverEvent entity id from XML payload " + before + " to " + after + ".");
