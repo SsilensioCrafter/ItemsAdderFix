@@ -47,9 +47,27 @@ public final class ItemsAdderFix extends JavaPlugin {
     private final Gson gson = new Gson();
     private ProtocolManager protocolManager;
     private PacketAdapter listener;
+    private boolean pluginEnabled;
+    private boolean normalizationEnabled;
+    private boolean convertIntArrayPayloads;
+    private boolean convertUuidObjectPayloads;
+    private boolean debugLogging;
     private boolean logFixes;
+    private boolean includeOriginalPayload;
+    private boolean includeNormalizedPayload;
+    private String handledErrorsFileName;
     private File handledErrorsFile;
     private final Object handledErrorsLock = new Object();
+    private static final String ANSI_BOLD = "\u001B[1m";
+    private static final String ANSI_RESET = "\u001B[0m";
+    private static final String[] BANNER_LINES = {
+            "███████   █████       ███████  ███████  ███ ███",
+            "  ███    ███ ███      ███        ███     ████ ",
+            "  ███    ███████      ██████     ███      ███ ",
+            "  ███    ███ ███      ███        ███     ████ ",
+            "███████  ███ ███      ███      ███████  ███ ███",
+            ANSI_BOLD + "IA FIX" + ANSI_RESET
+    };
 
     @Override
     public void onEnable() {
@@ -61,7 +79,28 @@ public final class ItemsAdderFix extends JavaPlugin {
 
         saveDefaultConfig();
         reloadConfig();
-        logFixes = getConfig().getBoolean("log-fixes", true);
+
+        pluginEnabled = getConfig().getBoolean("enabled", true);
+        debugLogging = getConfig().getBoolean("debug", false);
+        normalizationEnabled = getConfig().getBoolean("normalization.hover_event_uuid.enabled", true);
+        convertIntArrayPayloads = getConfig().getBoolean("normalization.hover_event_uuid.convert.int_array", true);
+        convertUuidObjectPayloads = getConfig().getBoolean("normalization.hover_event_uuid.convert.uuid_object", true);
+
+        includeOriginalPayload = getConfig().getBoolean("logging.handled_errors.include_original_payload", true);
+        includeNormalizedPayload = getConfig().getBoolean("logging.handled_errors.include_normalized_payload", true);
+        handledErrorsFileName = getConfig().getString("logging.handled_errors.file", "handled-errors.xml");
+        if (handledErrorsFileName == null || handledErrorsFileName.isBlank()) {
+            handledErrorsFileName = "handled-errors.xml";
+        }
+        logFixes = getConfig().getBoolean("logging.handled_errors.enabled", true)
+                && (includeOriginalPayload || includeNormalizedPayload);
+
+        if (!pluginEnabled) {
+            System.out.println("[ItemsAdderFix] Plugin disabled via configuration. No packets will be processed.");
+            getServer().getPluginManager().disablePlugin(this);
+            return;
+        }
+
         if (logFixes) {
             initializeHandledErrorsLog();
         } else {
@@ -69,21 +108,25 @@ public final class ItemsAdderFix extends JavaPlugin {
         }
 
         protocolManager = ProtocolLibrary.getProtocolManager();
-        PacketType[] monitoredTypes = collectServerPlayPackets();
-        listener = new PacketAdapter(this, ListenerPriority.LOWEST, monitoredTypes) {
-            @Override
-            public void onPacketSending(PacketEvent event) {
-                try {
-                    normalizePacket(event.getPacket());
-                } catch (Exception ex) {
-                    getLogger().log(Level.SEVERE, "Failed to normalize packet " + event.getPacketType(), ex);
+        if (normalizationEnabled) {
+            PacketType[] monitoredTypes = collectServerPlayPackets();
+            listener = new PacketAdapter(this, ListenerPriority.LOWEST, monitoredTypes) {
+                @Override
+                public void onPacketSending(PacketEvent event) {
+                    try {
+                        normalizePacket(event.getPacket());
+                    } catch (Exception ex) {
+                        getLogger().log(Level.SEVERE, "Failed to normalize packet " + event.getPacketType(), ex);
+                    }
                 }
-            }
-        };
+            };
+            protocolManager.addPacketListener(listener);
+        } else {
+            listener = null;
+            System.out.println("[ItemsAdderFix] Hover event normalization is disabled via configuration.");
+        }
 
-        protocolManager.addPacketListener(listener);
         printBanner();
-        getLogger().info("ItemsAdderFix enabled. Hover event UUID normalization active.");
     }
 
     @Override
@@ -243,6 +286,9 @@ public final class ItemsAdderFix extends JavaPlugin {
                 tooltip.addProperty("id", uuidString);
                 changed = true;
                 logFix(original, uuidString);
+                if (debugLogging) {
+                    getLogger().info(() -> "Normalized legacy hoverEvent UUID " + original + " -> " + uuidString);
+                }
             }
         }
 
@@ -271,6 +317,9 @@ public final class ItemsAdderFix extends JavaPlugin {
 
         if (element.isJsonArray()) {
             JsonArray array = element.getAsJsonArray();
+            if (!convertIntArrayPayloads) {
+                return null;
+            }
             if (array.size() != 4) {
                 return null;
             }
@@ -291,6 +340,9 @@ public final class ItemsAdderFix extends JavaPlugin {
 
         if (element.isJsonObject()) {
             JsonObject object = element.getAsJsonObject();
+            if (!convertUuidObjectPayloads) {
+                return null;
+            }
             if (object.has("most") && object.has("least")) {
                 try {
                     long most = object.get("most").getAsLong();
@@ -316,26 +368,20 @@ public final class ItemsAdderFix extends JavaPlugin {
     }
 
     private void printBanner() {
-        String[] lines = {
-                "███████   █████       ███████  ███████  ███ ███",
-                "  ███    ███ ███      ███        ███     ████ ",
-                "  ███    ███████      ██████     ███      ███ ",
-                "  ███    ███ ███      ███        ███     ████ ",
-                "███████  ███ ███      ███      ███████  ███ ███"
-        };
-
         System.out.println();
-        for (String line : lines) {
+        for (String line : BANNER_LINES) {
             System.out.println(line);
         }
         System.out.println();
     }
 
     private void logFix(String before, String after) {
-        if (!logFixes || handledErrorLogger == null) {
+        if (!logFixes || handledErrorsFile == null) {
             return;
         }
-        getLogger().info(() -> "Normalized hoverEvent entity id from XML payload " + before + " to " + after + ".");
+        if (!includeOriginalPayload && !includeNormalizedPayload) {
+            return;
+        }
         writeHandledError(before, after);
     }
 
@@ -347,7 +393,7 @@ public final class ItemsAdderFix extends JavaPlugin {
             return;
         }
 
-        handledErrorsFile = new File(dataFolder, "handled-errors.xml");
+        handledErrorsFile = new File(dataFolder, handledErrorsFileName);
 
         synchronized (handledErrorsLock) {
             if (!handledErrorsFile.exists() || handledErrorsFile.length() == 0) {
@@ -357,7 +403,7 @@ public final class ItemsAdderFix extends JavaPlugin {
                     document.appendChild(document.createElement("handledErrors"));
                     writeDocument(document);
                 } catch (ParserConfigurationException | TransformerException | IOException ex) {
-                    getLogger().log(Level.WARNING, "Unable to initialize handled-errors.xml", ex);
+                    getLogger().log(Level.WARNING, "Unable to initialize " + handledErrorsFileName, ex);
                     handledErrorsFile = null;
                 }
                 return;
@@ -374,14 +420,14 @@ public final class ItemsAdderFix extends JavaPlugin {
                     writeDocument(document);
                 }
             } catch (Exception ex) {
-                getLogger().log(Level.WARNING, "Failed to verify handled-errors.xml; recreating file.", ex);
+                getLogger().log(Level.WARNING, "Failed to verify " + handledErrorsFileName + "; recreating file.", ex);
                 try {
                     DocumentBuilder builder = newDocumentBuilder();
                     Document document = builder.newDocument();
                     document.appendChild(document.createElement("handledErrors"));
                     writeDocument(document);
                 } catch (ParserConfigurationException | TransformerException | IOException recreateEx) {
-                    getLogger().log(Level.WARNING, "Unable to recreate handled-errors.xml", recreateEx);
+                    getLogger().log(Level.WARNING, "Unable to recreate " + handledErrorsFileName, recreateEx);
                     handledErrorsFile = null;
                 }
             }
@@ -415,18 +461,29 @@ public final class ItemsAdderFix extends JavaPlugin {
                 Element entry = document.createElement("handledError");
                 entry.setAttribute("timestamp", Instant.now().toString());
 
-                Element original = document.createElement("original");
-                original.appendChild(document.createCDATASection(before));
-                Element normalized = document.createElement("normalized");
-                normalized.appendChild(document.createCDATASection(after));
+                boolean wroteContent = false;
+                if (includeOriginalPayload) {
+                    Element original = document.createElement("original");
+                    original.appendChild(document.createCDATASection(before));
+                    entry.appendChild(original);
+                    wroteContent = true;
+                }
+                if (includeNormalizedPayload) {
+                    Element normalized = document.createElement("normalized");
+                    normalized.appendChild(document.createCDATASection(after));
+                    entry.appendChild(normalized);
+                    wroteContent = true;
+                }
 
-                entry.appendChild(original);
-                entry.appendChild(normalized);
+                if (!wroteContent) {
+                    return;
+                }
+
                 root.appendChild(entry);
 
                 writeDocument(document);
             } catch (Exception ex) {
-                getLogger().log(Level.WARNING, "Unable to write handled error entry to handled-errors.xml", ex);
+                getLogger().log(Level.WARNING, "Unable to write handled error entry to " + handledErrorsFileName, ex);
             }
         }
     }

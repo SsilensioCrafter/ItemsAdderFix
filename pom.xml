@@ -55,6 +55,7 @@
     </dependencies>
 
     <build>
+        <finalName>ItemsAdderFix</finalName>
         <sourceDirectory>src/java</sourceDirectory>
         <resources>
             <resource>
