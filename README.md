@@ -1,5 +1,8 @@
 # ItemsAdderFix
 
+<img width="1024" height="1024" alt="image" src="https://github.com/user-attachments/assets/ff8fa131-fe14-4d47-8ade-3bfc71009e51" />
+
+
 ItemsAdderFix is a lightweight hotfix plugin for Paper/Spigot 1.20.1 servers that use [ItemsAdder](https://www.spigotmc.org/resources/75974/) together with ProtocolLib. Some vanilla packets still ship entity hover events that use Mojang's legacy UUID representation (an integer array or `{most,least}` object). When ItemsAdder/LoneLibs/Adventure try to deserialize these payloads they expect a string UUID and throw a `JsonSyntaxException`.
 
 This plugin intercepts every outgoing Play packet through ProtocolLib with the lowest priority and normalizes the `hoverEvent` payloads so that entity UUIDs are always strings. This keeps ItemsAdder running without touching your existing configuration.
