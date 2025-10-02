@@ -379,9 +379,6 @@ public final class ItemsAdderFix extends JavaPlugin {
         if (!logFixes || handledErrorsFile == null) {
             return;
         }
-        if (!includeOriginalPayload && !includeNormalizedPayload) {
-            return;
-        }
         writeHandledError(before, after);
     }
 
