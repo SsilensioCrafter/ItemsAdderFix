@@ -17,7 +17,25 @@ import com.google.gson.JsonPrimitive;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
 
-import com.ssilensio.itemsadderfix.logging.HandledErrorLogger;
+import javax.xml.XMLConstants;
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
+import javax.xml.transform.OutputKeys;
+import javax.xml.transform.Transformer;
+import javax.xml.transform.TransformerException;
+import javax.xml.transform.TransformerFactory;
+import javax.xml.transform.dom.DOMSource;
+import javax.xml.transform.stream.StreamResult;
+
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -30,7 +48,8 @@ public final class ItemsAdderFix extends JavaPlugin {
     private ProtocolManager protocolManager;
     private PacketAdapter listener;
     private boolean logFixes;
-    private HandledErrorLogger handledErrorLogger;
+    private File handledErrorsFile;
+    private final Object handledErrorsLock = new Object();
 
     @Override
     public void onEnable() {
@@ -44,13 +63,9 @@ public final class ItemsAdderFix extends JavaPlugin {
         reloadConfig();
         logFixes = getConfig().getBoolean("log-fixes", true);
         if (logFixes) {
-            handledErrorLogger = new HandledErrorLogger(getLogger(), getDataFolder());
-            if (!handledErrorLogger.initialize()) {
-                logFixes = false;
-                handledErrorLogger = null;
-            }
+            initializeHandledErrorsLog();
         } else {
-            handledErrorLogger = null;
+            handledErrorsFile = null;
         }
 
         protocolManager = ProtocolLibrary.getProtocolManager();
@@ -320,12 +335,151 @@ public final class ItemsAdderFix extends JavaPlugin {
         if (!logFixes || handledErrorLogger == null) {
             return;
         }
-        if (Objects.equals(before, after)) {
+        getLogger().info(() -> "Normalized hoverEvent entity id from XML payload " + before + " to " + after + ".");
+        writeHandledError(before, after);
+    }
+
+    private void initializeHandledErrorsLog() {
+        File dataFolder = getDataFolder();
+        if (!dataFolder.exists() && !dataFolder.mkdirs()) {
+            getLogger().warning("Unable to create plugin data folder; handled error logging disabled.");
+            handledErrorsFile = null;
             return;
         }
 
-        if (handledErrorLogger.logNormalization(before, after)) {
-            getLogger().info(() -> "Normalized hoverEvent entity id from XML payload " + before + " to " + after + ".");
+        handledErrorsFile = new File(dataFolder, "handled-errors.xml");
+
+        synchronized (handledErrorsLock) {
+            if (!handledErrorsFile.exists() || handledErrorsFile.length() == 0) {
+                try {
+                    DocumentBuilder builder = newDocumentBuilder();
+                    Document document = builder.newDocument();
+                    document.appendChild(document.createElement("handledErrors"));
+                    writeDocument(document);
+                } catch (ParserConfigurationException | TransformerException | IOException ex) {
+                    getLogger().log(Level.WARNING, "Unable to initialize handled-errors.xml", ex);
+                    handledErrorsFile = null;
+                }
+                return;
+            }
+
+            try {
+                DocumentBuilder builder = newDocumentBuilder();
+                Document document;
+                try (FileInputStream inputStream = new FileInputStream(handledErrorsFile)) {
+                    document = builder.parse(inputStream);
+                }
+                if (document.getDocumentElement() == null) {
+                    document.appendChild(document.createElement("handledErrors"));
+                    writeDocument(document);
+                }
+            } catch (Exception ex) {
+                getLogger().log(Level.WARNING, "Failed to verify handled-errors.xml; recreating file.", ex);
+                try {
+                    DocumentBuilder builder = newDocumentBuilder();
+                    Document document = builder.newDocument();
+                    document.appendChild(document.createElement("handledErrors"));
+                    writeDocument(document);
+                } catch (ParserConfigurationException | TransformerException | IOException recreateEx) {
+                    getLogger().log(Level.WARNING, "Unable to recreate handled-errors.xml", recreateEx);
+                    handledErrorsFile = null;
+                }
+            }
+        }
+    }
+
+    private void writeHandledError(String before, String after) {
+        if (handledErrorsFile == null) {
+            return;
+        }
+
+        synchronized (handledErrorsLock) {
+            try {
+                DocumentBuilder builder = newDocumentBuilder();
+                Document document;
+                if (handledErrorsFile.exists() && handledErrorsFile.length() > 0) {
+                    try (FileInputStream inputStream = new FileInputStream(handledErrorsFile)) {
+                        document = builder.parse(inputStream);
+                    }
+                } else {
+                    document = builder.newDocument();
+                    document.appendChild(document.createElement("handledErrors"));
+                }
+
+                Element root = document.getDocumentElement();
+                if (root == null) {
+                    root = document.createElement("handledErrors");
+                    document.appendChild(root);
+                }
+
+                Element entry = document.createElement("handledError");
+                entry.setAttribute("timestamp", Instant.now().toString());
+
+                Element original = document.createElement("original");
+                original.appendChild(document.createCDATASection(before));
+                Element normalized = document.createElement("normalized");
+                normalized.appendChild(document.createCDATASection(after));
+
+                entry.appendChild(original);
+                entry.appendChild(normalized);
+                root.appendChild(entry);
+
+                writeDocument(document);
+            } catch (Exception ex) {
+                getLogger().log(Level.WARNING, "Unable to write handled error entry to handled-errors.xml", ex);
+            }
+        }
+    }
+
+    private DocumentBuilder newDocumentBuilder() throws ParserConfigurationException {
+        DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+        factory.setNamespaceAware(true);
+        factory.setIgnoringComments(true);
+        factory.setExpandEntityReferences(false);
+        try {
+            factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
+            factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+            factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+            factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+            factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
+        } catch (ParserConfigurationException ignored) {
+            // If a feature isn't supported, we proceed with the defaults.
+        }
+        try {
+            factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
+            factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
+        } catch (IllegalArgumentException ignored) {
+            // Attributes may not be supported by all parser implementations.
+        }
+        return factory.newDocumentBuilder();
+    }
+
+    private Transformer newTransformer() throws TransformerException {
+        TransformerFactory factory = TransformerFactory.newInstance();
+        try {
+            factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
+            factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
+            factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_STYLESHEET, "");
+        } catch (IllegalArgumentException | TransformerException ignored) {
+            // Some implementations may not support these attributes.
+        }
+        Transformer transformer = factory.newTransformer();
+        transformer.setOutputProperty(OutputKeys.INDENT, "yes");
+        transformer.setOutputProperty(OutputKeys.ENCODING, "UTF-8");
+        transformer.setOutputProperty("{http://xml.apache.org/xslt}indent-amount", "2");
+        return transformer;
+    }
+
+    private void writeDocument(Document document) throws TransformerException, IOException {
+        if (handledErrorsFile == null) {
+            return;
+        }
+
+        Transformer transformer = newTransformer();
+        DOMSource source = new DOMSource(document);
+        try (FileOutputStream outputStream = new FileOutputStream(handledErrorsFile, false)) {
+            StreamResult result = new StreamResult(outputStream);
+            transformer.transform(source, result);
         }
     }
 }
