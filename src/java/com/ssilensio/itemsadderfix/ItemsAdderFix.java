@@ -17,6 +17,7 @@ import com.google.gson.JsonPrimitive;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import com.ssilensio.itemsadderfix.logging.HandledErrorLogger;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -29,6 +30,7 @@ public final class ItemsAdderFix extends JavaPlugin {
     private ProtocolManager protocolManager;
     private PacketAdapter listener;
     private boolean logFixes;
+    private HandledErrorLogger handledErrorLogger;
 
     @Override
     public void onEnable() {
@@ -41,6 +43,15 @@ public final class ItemsAdderFix extends JavaPlugin {
         saveDefaultConfig();
         reloadConfig();
         logFixes = getConfig().getBoolean("log-fixes", true);
+        if (logFixes) {
+            handledErrorLogger = new HandledErrorLogger(getLogger(), getDataFolder());
+            if (!handledErrorLogger.initialize()) {
+                logFixes = false;
+                handledErrorLogger = null;
+            }
+        } else {
+            handledErrorLogger = null;
+        }
 
         protocolManager = ProtocolLibrary.getProtocolManager();
         PacketType[] monitoredTypes = collectServerPlayPackets();
@@ -290,17 +301,12 @@ public final class ItemsAdderFix extends JavaPlugin {
     }
 
     private void printBanner() {
-        final String reset = "\u001B[0m";
-        final String primary = "\u001B[38;5;219m";
-        final String accent = "\u001B[38;5;39m";
         String[] lines = {
-                primary + "██╗██╗   ██╗███████╗██╗██╗  ██╗" + reset,
-                primary + "██║██║   ██║██╔════╝██║██║ ██╔╝" + reset,
-                accent + "██║██║   ██║█████╗  ██║█████╔╝ " + reset,
-                accent + "██║╚██╗ ██╔╝██╔══╝  ██║██╔═██╗ " + reset,
-                primary + "██║ ╚████╔╝ ███████╗██║██║  ██╗" + reset,
-                primary + "╚═╝  ╚═══╝  ╚══════╝╚═╝╚═╝  ╚═╝" + reset,
-                accent + "           I A F I X" + reset
+                "███████   █████       ███████  ███████  ███ ███",
+                "  ███    ███ ███      ███        ███     ████ ",
+                "  ███    ███████      ██████     ███      ███ ",
+                "  ███    ███ ███      ███        ███     ████ ",
+                "███████  ███ ███      ███      ███████  ███ ███"
         };
 
         System.out.println();
@@ -311,9 +317,15 @@ public final class ItemsAdderFix extends JavaPlugin {
     }
 
     private void logFix(String before, String after) {
-        if (!logFixes) {
+        if (!logFixes || handledErrorLogger == null) {
             return;
         }
-        getLogger().info(() -> "Normalized hoverEvent entity id from XML payload " + before + " to " + after + ".");
+        if (Objects.equals(before, after)) {
+            return;
+        }
+
+        if (handledErrorLogger.logNormalization(before, after)) {
+            getLogger().info(() -> "Normalized hoverEvent entity id from XML payload " + before + " to " + after + ".");
+        }
     }
 }
