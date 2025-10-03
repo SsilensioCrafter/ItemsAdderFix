@@ -35,6 +35,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -319,22 +320,8 @@ public final class ItemsAdderFix extends JavaPlugin {
             if (!convertIntArrayPayloads) {
                 return null;
             }
-            if (array.size() != 4) {
-                return null;
-            }
 
-            long[] parts = new long[4];
-            for (int i = 0; i < 4; i++) {
-                JsonElement part = array.get(i);
-                if (!part.isJsonPrimitive() || !part.getAsJsonPrimitive().isNumber()) {
-                    return null;
-                }
-                parts[i] = part.getAsLong() & 0xFFFFFFFFL;
-            }
-
-            long most = (parts[0] << 32) | parts[1];
-            long least = (parts[2] << 32) | parts[3];
-            return new UUID(most, least).toString();
+            return extractUuidFromIntArray(array);
         }
 
         if (element.isJsonObject()) {
@@ -363,6 +350,48 @@ public final class ItemsAdderFix extends JavaPlugin {
                 return element.getAsString();
             }
         }
+        return null;
+    }
+
+    static String extractUuidFromIntArray(JsonArray array) {
+        int size = array.size();
+        if (size == 4) {
+            long[] parts = new long[4];
+            for (int i = 0; i < 4; i++) {
+                JsonElement part = array.get(i);
+                if (!part.isJsonPrimitive() || !part.getAsJsonPrimitive().isNumber()) {
+                    return null;
+                }
+                parts[i] = part.getAsLong() & 0xFFFFFFFFL;
+            }
+
+            long most = (parts[0] << 32) | parts[1];
+            long least = (parts[2] << 32) | parts[3];
+            return new UUID(most, least).toString();
+        }
+
+        if (size == 16) {
+            byte[] bytes = new byte[16];
+            for (int i = 0; i < 16; i++) {
+                JsonElement part = array.get(i);
+                if (!part.isJsonPrimitive() || !part.getAsJsonPrimitive().isNumber()) {
+                    return null;
+                }
+
+                long value = part.getAsLong();
+                if (value < -128 || value > 255) {
+                    return null;
+                }
+
+                bytes[i] = (byte) (value & 0xFF);
+            }
+
+            ByteBuffer buffer = ByteBuffer.wrap(bytes);
+            long most = buffer.getLong();
+            long least = buffer.getLong();
+            return new UUID(most, least).toString();
+        }
+
         return null;
     }
 
