@@ -32,18 +32,32 @@ import java.util.logging.Logger;
 public final class HandledErrorLogger {
     private final Logger logger;
     private final File dataFolder;
+    private final String fileName;
+    private final boolean includeOriginal;
+    private final boolean includeNormalized;
     private final Object lock = new Object();
     private File handledErrorsFile;
     private boolean initialized;
 
-    public HandledErrorLogger(Logger logger, File dataFolder) {
+    public HandledErrorLogger(Logger logger,
+                              File dataFolder,
+                              String fileName,
+                              boolean includeOriginal,
+                              boolean includeNormalized) {
         this.logger = Objects.requireNonNull(logger, "logger");
         this.dataFolder = dataFolder;
+        this.fileName = (fileName == null || fileName.isBlank()) ? "handled-errors.xml" : fileName;
+        this.includeOriginal = includeOriginal;
+        this.includeNormalized = includeNormalized;
     }
 
     public boolean initialize() {
         if (initialized) {
             return handledErrorsFile != null;
+        }
+
+        if (!includeOriginal && !includeNormalized) {
+            return false;
         }
 
         if (dataFolder == null) {
@@ -60,7 +74,7 @@ public final class HandledErrorLogger {
                 return false;
             }
 
-            handledErrorsFile = new File(dataFolder, "handled-errors.xml");
+            handledErrorsFile = new File(dataFolder, fileName);
 
             try {
                 DocumentBuilder builder = newDocumentBuilder();
@@ -81,11 +95,11 @@ public final class HandledErrorLogger {
                 initialized = true;
                 return true;
             } catch (ParserConfigurationException | IOException | TransformerException ex) {
-                logger.log(Level.WARNING, "Unable to initialize handled-errors.xml", ex);
+                logger.log(Level.WARNING, "Unable to initialize " + fileName, ex);
                 handledErrorsFile = null;
                 return false;
             } catch (Exception ex) {
-                logger.log(Level.WARNING, "Failed to verify handled-errors.xml; recreating file.", ex);
+                logger.log(Level.WARNING, "Failed to verify " + fileName + "; recreating file.", ex);
                 try {
                     DocumentBuilder builder = newDocumentBuilder();
                     Document document = builder.newDocument();
@@ -94,7 +108,7 @@ public final class HandledErrorLogger {
                     initialized = true;
                     return true;
                 } catch (ParserConfigurationException | TransformerException | IOException recreateEx) {
-                    logger.log(Level.WARNING, "Unable to recreate handled-errors.xml", recreateEx);
+                    logger.log(Level.WARNING, "Unable to recreate " + fileName, recreateEx);
                     handledErrorsFile = null;
                     return false;
                 }
@@ -106,10 +120,13 @@ public final class HandledErrorLogger {
         if (!initialized || handledErrorsFile == null) {
             return false;
         }
-        if (original == null || normalized == null) {
+        if (!includeOriginal && !includeNormalized) {
             return false;
         }
-        if (original.isBlank() || normalized.isBlank()) {
+        if (includeOriginal && (original == null || original.isBlank())) {
+            return false;
+        }
+        if (includeNormalized && (normalized == null || normalized.isBlank())) {
             return false;
         }
 
@@ -135,19 +152,24 @@ public final class HandledErrorLogger {
                 Element entry = document.createElement("handledError");
                 entry.setAttribute("timestamp", Instant.now().toString());
 
-                Element originalElement = document.createElement("original");
-                originalElement.appendChild(document.createCDATASection(original));
-                Element normalizedElement = document.createElement("normalized");
-                normalizedElement.appendChild(document.createCDATASection(normalized));
+                if (includeOriginal) {
+                    Element originalElement = document.createElement("original");
+                    originalElement.appendChild(document.createCDATASection(original));
+                    entry.appendChild(originalElement);
+                }
 
-                entry.appendChild(originalElement);
-                entry.appendChild(normalizedElement);
+                if (includeNormalized) {
+                    Element normalizedElement = document.createElement("normalized");
+                    normalizedElement.appendChild(document.createCDATASection(normalized));
+                    entry.appendChild(normalizedElement);
+                }
+
                 root.appendChild(entry);
 
                 writeDocument(document);
                 return true;
             } catch (Exception ex) {
-                logger.log(Level.WARNING, "Unable to write handled error entry to handled-errors.xml", ex);
+                logger.log(Level.WARNING, "Unable to write handled error entry to " + fileName, ex);
                 return false;
             }
         }

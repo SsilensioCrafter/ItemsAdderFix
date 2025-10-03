@@ -26,7 +26,13 @@ class HandledErrorLoggerTest {
     void createsLogFileAndAppendsHandledErrorEntries() throws Exception {
         File dataFolder = tempDir.toFile();
         Logger logger = Logger.getLogger("HandledErrorLoggerTest");
-        HandledErrorLogger handledErrorLogger = new HandledErrorLogger(logger, dataFolder);
+        HandledErrorLogger handledErrorLogger = new HandledErrorLogger(
+                logger,
+                dataFolder,
+                "handled-errors.xml",
+                true,
+                true
+        );
 
         assertTrue(handledErrorLogger.initialize());
 
@@ -49,7 +55,13 @@ class HandledErrorLoggerTest {
     void skipsWritingWhenOriginalOrNormalizedMissing() throws Exception {
         File dataFolder = tempDir.resolve("skip").toFile();
         Logger logger = Logger.getLogger("HandledErrorLoggerSkipTest");
-        HandledErrorLogger handledErrorLogger = new HandledErrorLogger(logger, dataFolder);
+        HandledErrorLogger handledErrorLogger = new HandledErrorLogger(
+                logger,
+                dataFolder,
+                "handled-errors.xml",
+                true,
+                true
+        );
 
         assertTrue(handledErrorLogger.initialize());
         File logFile = dataFolder.toPath().resolve("handled-errors.xml").toFile();

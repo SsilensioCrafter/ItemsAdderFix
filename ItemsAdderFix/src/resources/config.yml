@@ -19,4 +19,6 @@ normalization:
     convert:
       int_array: true
       uuid_object: true
+sanitization:
+  prevent_unloaded_chunk_dig: true
 
