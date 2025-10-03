@@ -10,8 +10,10 @@ import com.comphenix.protocol.events.PacketEvent;
 import com.comphenix.protocol.reflect.StructureModifier;
 import com.comphenix.protocol.wrappers.BlockPosition;
 import com.comphenix.protocol.wrappers.EnumWrappers;
+import com.comphenix.protocol.wrappers.EnumWrappers.PlayerDigType;
 import com.comphenix.protocol.wrappers.WrappedChatComponent;
 import com.ssilensio.itemsadderfix.logging.HandledErrorLogger;
+import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
@@ -146,14 +148,32 @@ public final class ItemsAdderFix extends JavaPlugin {
                 if (event.isCancelled()) {
                     return;
                 }
-                EnumWrappers.PlayerDigType digType = event.getPacket().getPlayerDigTypes().readSafely(0);
-                BlockPosition position = event.getPacket().getBlockPositionModifier().readSafely(0);
-                BlockDigSanitizer.ChunkLoadChecker checker = chunkChecker(event.getPlayer());
-                if (blockDigSanitizer.shouldCancel(digType, position, checker)) {
+                PlayerDigType digType = event.getPacket().getPlayerDigTypes().readSafely(0);
+                StructureModifier<BlockPosition> positionModifier = event.getPacket().getBlockPositionModifier();
+                BlockPosition position = positionModifier != null ? positionModifier.readSafely(0) : null;
+                BlockDigSanitizer.Result result = blockDigSanitizer.evaluate(
+                        digType,
+                        position,
+                        chunkChecker(event.getPlayer()),
+                        blockPositionProvider(event.getPlayer())
+                );
+
+                if (result.shouldCancel()) {
                     event.setCancelled(true);
                     if (debugLogging && event.getPlayer() != null) {
                         getLogger().info(() -> "Cancelled dig packet from " + event.getPlayer().getName()
                                 + " at " + position + " because the chunk is not loaded.");
+                    }
+                    return;
+                }
+
+                BlockPosition replacement = result.replacement();
+                if (replacement != null && positionModifier != null) {
+                    positionModifier.writeSafely(0, replacement);
+                    if (debugLogging && event.getPlayer() != null) {
+                        BlockPosition original = position;
+                        getLogger().info(() -> "Replaced dig packet position from " + original
+                                + " to " + replacement + " for " + event.getPlayer().getName());
                     }
                 }
             }
@@ -171,6 +191,19 @@ public final class ItemsAdderFix extends JavaPlugin {
             return null;
         }
         return world::isChunkLoaded;
+    }
+
+    private BlockDigSanitizer.BlockPositionProvider blockPositionProvider(Player player) {
+        if (player == null) {
+            return null;
+        }
+        return () -> {
+            Location location = player.getLocation();
+            if (location == null) {
+                return null;
+            }
+            return new BlockPosition(location.getBlockX(), location.getBlockY(), location.getBlockZ());
+        };
     }
 
     private void registerListener(PacketAdapter adapter) {
