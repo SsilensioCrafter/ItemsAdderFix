@@ -142,7 +142,7 @@ public final class ItemsAdderFix extends JavaPlugin {
     }
 
     private void registerBlockDigSanitizer() {
-        PacketAdapter adapter = new PacketAdapter(this, ListenerPriority.HIGHEST, PacketType.Play.Client.BLOCK_DIG) {
+        PacketAdapter adapter = new PacketAdapter(this, ListenerPriority.LOWEST, PacketType.Play.Client.BLOCK_DIG) {
             @Override
             public void onPacketReceiving(PacketEvent event) {
                 if (event.isCancelled()) {
