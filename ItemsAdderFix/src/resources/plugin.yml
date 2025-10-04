@@ -1,0 +1,9 @@
+name: ItemsAdderFix
+version: ${project.version}
+main: com.ssilensio.itemsadderfix.ItemsAdderFix
+depend: [ProtocolLib]
+loadbefore:
+  - ItemsAdder
+api-version: '1.20'
+description: 'Normalizes hoverEvent entity ids and drops invalid dig packets that ItemsAdder cannot handle.'
+author: ssilensio
