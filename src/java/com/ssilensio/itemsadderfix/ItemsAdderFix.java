@@ -7,58 +7,42 @@ import com.comphenix.protocol.events.ListenerPriority;
 import com.comphenix.protocol.events.PacketAdapter;
 import com.comphenix.protocol.events.PacketContainer;
 import com.comphenix.protocol.events.PacketEvent;
+import com.comphenix.protocol.reflect.StructureModifier;
+import com.comphenix.protocol.wrappers.BlockPosition;
+import com.comphenix.protocol.wrappers.EnumWrappers;
+import com.comphenix.protocol.wrappers.EnumWrappers.PlayerDigType;
 import com.comphenix.protocol.wrappers.WrappedChatComponent;
-import com.google.gson.Gson;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParseException;
-import com.google.gson.JsonPrimitive;
+import com.ssilensio.itemsadderfix.logging.HandledErrorLogger;
+import org.bukkit.Location;
+import org.bukkit.World;
+import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
 
-import javax.xml.XMLConstants;
-import javax.xml.parsers.DocumentBuilder;
-import javax.xml.parsers.DocumentBuilderFactory;
-import javax.xml.parsers.ParserConfigurationException;
-import javax.xml.transform.OutputKeys;
-import javax.xml.transform.Transformer;
-import javax.xml.transform.TransformerException;
-import javax.xml.transform.TransformerFactory;
-import javax.xml.transform.dom.DOMSource;
-import javax.xml.transform.stream.StreamResult;
-
-import org.w3c.dom.Document;
-import org.w3c.dom.Element;
-
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.time.Instant;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
+import java.util.LinkedHashSet;
 import java.util.Objects;
-import java.util.UUID;
+import java.util.Set;
+import java.util.function.Consumer;
 import java.util.logging.Level;
 
 public final class ItemsAdderFix extends JavaPlugin {
-    private final Gson gson = new Gson();
+    private static final String CONFIG_LOGGING_ENABLED = "logging.handled_errors.enabled";
+    private static final String CONFIG_LOGGING_FILE = "logging.handled_errors.file";
+    private static final String CONFIG_LOGGING_INCLUDE_ORIGINAL = "logging.handled_errors.include_original_payload";
+    private static final String CONFIG_LOGGING_INCLUDE_NORMALIZED = "logging.handled_errors.include_normalized_payload";
+
     private ProtocolManager protocolManager;
-    private PacketAdapter listener;
-    private boolean pluginEnabled;
-    private boolean normalizationEnabled;
-    private boolean convertIntArrayPayloads;
-    private boolean convertUuidObjectPayloads;
+    private final Set<PacketAdapter> listeners = new LinkedHashSet<>();
+    private HoverEventUuidNormalizer normalizer;
+    private final BlockDigSanitizer blockDigSanitizer = new BlockDigSanitizer();
+    private HandledErrorLogger handledErrorLogger;
     private boolean debugLogging;
     private boolean logFixes;
-    private boolean includeOriginalPayload;
-    private boolean includeNormalizedPayload;
-    private String handledErrorsFileName;
-    private File handledErrorsFile;
-    private final Object handledErrorsLock = new Object();
+    private boolean convertIntArrayPayloads;
+    private boolean convertUuidObjectPayloads;
+    private boolean normalizationEnabled;
+    private boolean preventUnloadedChunkDig;
+
     private static final String ANSI_BOLD = "\u001B[1m";
     private static final String ANSI_RESET = "\u001B[0m";
     private static final String[] BANNER_LINES = {
@@ -80,50 +64,42 @@ public final class ItemsAdderFix extends JavaPlugin {
         saveDefaultConfig();
         reloadConfig();
 
-        pluginEnabled = getConfig().getBoolean("enabled", true);
-        debugLogging = getConfig().getBoolean("debug", false);
-        normalizationEnabled = getConfig().getBoolean("normalization.hover_event_uuid.enabled", true);
-        convertIntArrayPayloads = getConfig().getBoolean("normalization.hover_event_uuid.convert.int_array", true);
-        convertUuidObjectPayloads = getConfig().getBoolean("normalization.hover_event_uuid.convert.uuid_object", true);
-
-        includeOriginalPayload = getConfig().getBoolean("logging.handled_errors.include_original_payload", true);
-        includeNormalizedPayload = getConfig().getBoolean("logging.handled_errors.include_normalized_payload", true);
-        handledErrorsFileName = getConfig().getString("logging.handled_errors.file", "handled-errors.xml");
-        if (handledErrorsFileName == null || handledErrorsFileName.isBlank()) {
-            handledErrorsFileName = "handled-errors.xml";
-        }
-        logFixes = getConfig().getBoolean("logging.handled_errors.enabled", true)
-                && (includeOriginalPayload || includeNormalizedPayload);
-
-        if (!pluginEnabled) {
-            System.out.println("[ItemsAdderFix] Plugin disabled via configuration. No packets will be processed.");
+        if (!getConfig().getBoolean("enabled", true)) {
+            getLogger().info("Plugin disabled via configuration. No packets will be processed.");
             getServer().getPluginManager().disablePlugin(this);
             return;
         }
 
+        debugLogging = getConfig().getBoolean("debug", false);
+        normalizationEnabled = getConfig().getBoolean("normalization.hover_event_uuid.enabled", true);
+        convertIntArrayPayloads = getConfig().getBoolean("normalization.hover_event_uuid.convert.int_array", true);
+        convertUuidObjectPayloads = getConfig().getBoolean("normalization.hover_event_uuid.convert.uuid_object", true);
+        preventUnloadedChunkDig = getConfig().getBoolean("sanitization.prevent_unloaded_chunk_dig", true);
+
+        boolean includeOriginal = getConfig().getBoolean(CONFIG_LOGGING_INCLUDE_ORIGINAL, true);
+        boolean includeNormalized = getConfig().getBoolean(CONFIG_LOGGING_INCLUDE_NORMALIZED, true);
+        String fileName = getConfig().getString(CONFIG_LOGGING_FILE, "handled-errors.xml");
+        logFixes = getConfig().getBoolean(CONFIG_LOGGING_ENABLED, true) && (includeOriginal || includeNormalized);
+
         if (logFixes) {
-            initializeHandledErrorsLog();
-        } else {
-            handledErrorsFile = null;
+            handledErrorLogger = new HandledErrorLogger(getLogger(), getDataFolder(), fileName, includeOriginal, includeNormalized);
+            if (!handledErrorLogger.initialize()) {
+                handledErrorLogger = null;
+                logFixes = false;
+            }
         }
 
         protocolManager = ProtocolLibrary.getProtocolManager();
+        normalizer = new HoverEventUuidNormalizer();
+
         if (normalizationEnabled) {
-            PacketType[] monitoredTypes = collectServerPlayPackets();
-            listener = new PacketAdapter(this, ListenerPriority.LOWEST, monitoredTypes) {
-                @Override
-                public void onPacketSending(PacketEvent event) {
-                    try {
-                        normalizePacket(event.getPacket());
-                    } catch (Exception ex) {
-                        getLogger().log(Level.SEVERE, "Failed to normalize packet " + event.getPacketType(), ex);
-                    }
-                }
-            };
-            protocolManager.addPacketListener(listener);
+            registerHoverEventNormalizer();
         } else {
-            listener = null;
-            System.out.println("[ItemsAdderFix] Hover event normalization is disabled via configuration.");
+            getLogger().info("Hover event normalization is disabled via configuration.");
+        }
+
+        if (preventUnloadedChunkDig) {
+            registerBlockDigSanitizer();
         }
 
         printBanner();
@@ -131,8 +107,11 @@ public final class ItemsAdderFix extends JavaPlugin {
 
     @Override
     public void onDisable() {
-        if (protocolManager != null && listener != null) {
-            protocolManager.removePacketListener(listener);
+        if (protocolManager != null) {
+            for (PacketAdapter listener : listeners) {
+                protocolManager.removePacketListener(listener);
+            }
+            listeners.clear();
         }
     }
 
@@ -141,42 +120,99 @@ public final class ItemsAdderFix extends JavaPlugin {
         return plugin != null && plugin.isEnabled();
     }
 
-    private void normalizePacket(PacketContainer packet) {
-        if (packet == null) {
-            return;
-        }
+    private void registerHoverEventNormalizer() {
+        Set<PacketType> monitoredTypes = collectServerPlayPackets();
+        HoverEventUuidNormalizer.NormalizationOptions options = new HoverEventUuidNormalizer.NormalizationOptions(
+                convertIntArrayPayloads,
+                convertUuidObjectPayloads
+        );
 
-        var components = packet.getChatComponents();
-        if (components == null) {
-            return;
-        }
-
-        for (int i = 0; i < components.size(); i++) {
-            WrappedChatComponent component;
-            try {
-                component = components.readSafely(i);
-            } catch (Exception ignored) {
-                continue;
+        PacketAdapter adapter = new PacketAdapter(this, ListenerPriority.LOWEST, monitoredTypes.toArray(PacketType[]::new)) {
+            @Override
+            public void onPacketSending(PacketEvent event) {
+                try {
+                    normalizePacket(event.getPacket(), options);
+                } catch (Exception ex) {
+                    getLogger().log(Level.SEVERE, "Failed to normalize packet " + event.getPacketType(), ex);
+                }
             }
+        };
 
-            if (component == null) {
-                continue;
-            }
-
-            String json = component.getJson();
-            if (json == null || json.isEmpty()) {
-                continue;
-            }
-
-            String normalized = normalizeJson(json);
-            if (!Objects.equals(json, normalized)) {
-                components.write(i, WrappedChatComponent.fromJson(normalized));
-            }
-        }
+        registerListener(adapter);
     }
 
-    private PacketType[] collectServerPlayPackets() {
-        List<PacketType> types = new ArrayList<>();
+    private void registerBlockDigSanitizer() {
+        PacketAdapter adapter = new PacketAdapter(this, ListenerPriority.LOWEST, PacketType.Play.Client.BLOCK_DIG) {
+            @Override
+            public void onPacketReceiving(PacketEvent event) {
+                if (event.isCancelled()) {
+                    return;
+                }
+                PlayerDigType digType = event.getPacket().getPlayerDigTypes().readSafely(0);
+                StructureModifier<BlockPosition> positionModifier = event.getPacket().getBlockPositionModifier();
+                BlockPosition position = positionModifier != null ? positionModifier.readSafely(0) : null;
+                BlockDigSanitizer.Result result = blockDigSanitizer.evaluate(
+                        digType,
+                        position,
+                        chunkChecker(event.getPlayer()),
+                        blockPositionProvider(event.getPlayer())
+                );
+
+                if (result.shouldCancel()) {
+                    event.setCancelled(true);
+                    if (debugLogging && event.getPlayer() != null) {
+                        getLogger().info(() -> "Cancelled dig packet from " + event.getPlayer().getName()
+                                + " at " + position + " because the chunk is not loaded.");
+                    }
+                    return;
+                }
+
+                BlockPosition replacement = result.replacement();
+                if (replacement != null && positionModifier != null) {
+                    positionModifier.writeSafely(0, replacement);
+                    if (debugLogging && event.getPlayer() != null) {
+                        BlockPosition original = position;
+                        getLogger().info(() -> "Replaced dig packet position from " + original
+                                + " to " + replacement + " for " + event.getPlayer().getName());
+                    }
+                }
+            }
+        };
+
+        registerListener(adapter);
+    }
+
+    private BlockDigSanitizer.ChunkLoadChecker chunkChecker(Player player) {
+        if (player == null) {
+            return null;
+        }
+        World world = player.getWorld();
+        if (world == null) {
+            return null;
+        }
+        return world::isChunkLoaded;
+    }
+
+    private BlockDigSanitizer.BlockPositionProvider blockPositionProvider(Player player) {
+        if (player == null) {
+            return null;
+        }
+        return () -> {
+            Location location = player.getLocation();
+            if (location == null) {
+                return null;
+            }
+            return new BlockPosition(location.getBlockX(), location.getBlockY(), location.getBlockZ());
+        };
+    }
+
+    private void registerListener(PacketAdapter adapter) {
+        listeners.add(adapter);
+        protocolManager.addPacketListener(adapter);
+    }
+
+    private Set<PacketType> collectServerPlayPackets() {
+        Set<PacketType> types = new LinkedHashSet<>();
         for (PacketType type : PacketType.values()) {
             if (!type.isSupported()) {
                 continue;
@@ -189,382 +225,62 @@ public final class ItemsAdderFix extends JavaPlugin {
             }
             types.add(type);
         }
-        return types.toArray(new PacketType[0]);
+        return types;
     }
 
-    private String normalizeJson(String json) {
-        JsonElement element;
-        try {
-            element = gson.fromJson(json, JsonElement.class);
-        } catch (JsonParseException ex) {
-            return json;
+    private void normalizePacket(PacketContainer packet, HoverEventUuidNormalizer.NormalizationOptions options) {
+        if (packet == null) {
+            return;
         }
 
-        if (element == null || element.isJsonNull()) {
-            return json;
-        }
-
-        boolean changed = normalizeElement(element);
-        return changed ? gson.toJson(element) : json;
-    }
-
-    private boolean normalizeElement(JsonElement element) {
-        if (element == null || element.isJsonNull()) {
-            return false;
-        }
-
-        boolean changed = false;
-
-        if (element.isJsonObject()) {
-            JsonObject object = element.getAsJsonObject();
-            for (Map.Entry<String, JsonElement> entry : object.entrySet()) {
-                if ("hoverEvent".equals(entry.getKey()) && entry.getValue().isJsonObject()) {
-                    changed |= normalizeHoverEvent(entry.getValue().getAsJsonObject());
-                } else {
-                    changed |= normalizeElement(entry.getValue());
-                }
+        Consumer<HoverEventUuidNormalizer.NormalizationRecord> fixLogger = record -> {
+            if (logFixes && handledErrorLogger != null) {
+                handledErrorLogger.logNormalization(record.originalPayload(), record.normalizedUuid());
             }
-        } else if (element.isJsonArray()) {
-            JsonArray array = element.getAsJsonArray();
-            for (JsonElement child : array) {
-                changed |= normalizeElement(child);
+            if (debugLogging) {
+                getLogger().info(() -> "Normalized hoverEvent UUID " + record.originalPayload()
+                        + " -> " + record.normalizedUuid());
             }
-        }
+        };
 
-        return changed;
+        normalizeComponentModifier(packet.getChatComponents(), options, fixLogger);
+
+        StructureModifier<WrappedChatComponent> modifier = packet.getModifier().withType(WrappedChatComponent.class);
+        if (modifier != null && modifier != packet.getChatComponents()) {
+            normalizeComponentModifier(modifier, options, fixLogger);
+        }
     }
 
-    private boolean normalizeHoverEvent(JsonObject hoverEvent) {
-        boolean changed = false;
-
-        String action = getString(hoverEvent, "action");
-        if (action != null && "show_entity".equalsIgnoreCase(action)) {
-            changed |= normalizeShowEntityPayload(hoverEvent, "value");
-            changed |= normalizeShowEntityPayload(hoverEvent, "contents");
+    private void normalizeComponentModifier(StructureModifier<WrappedChatComponent> modifier,
+                                            HoverEventUuidNormalizer.NormalizationOptions options,
+                                            Consumer<HoverEventUuidNormalizer.NormalizationRecord> fixLogger) {
+        if (modifier == null) {
+            return;
         }
 
-        for (Map.Entry<String, JsonElement> entry : hoverEvent.entrySet()) {
-            changed |= normalizeElement(entry.getValue());
-        }
-
-        return changed;
-    }
-
-    private boolean normalizeShowEntityPayload(JsonObject hoverEvent, String key) {
-        if (!hoverEvent.has(key)) {
-            return false;
-        }
-
-        JsonElement payload = hoverEvent.get(key);
-        boolean changed = false;
-
-        if (payload.isJsonObject()) {
-            changed |= normalizeEntityTooltip(payload.getAsJsonObject());
-        } else if (payload.isJsonArray()) {
-            JsonArray array = payload.getAsJsonArray();
-            for (JsonElement element : array) {
-                if (element.isJsonObject()) {
-                    changed |= normalizeEntityTooltip(element.getAsJsonObject());
-                }
-                changed |= normalizeElement(element);
-            }
-        } else {
-            changed |= normalizeElement(payload);
-        }
-
-        return changed;
-    }
-
-    private boolean normalizeEntityTooltip(JsonObject tooltip) {
-        boolean changed = false;
-
-        if (tooltip.has("id")) {
-            JsonElement idElement = tooltip.get("id");
-            String uuidString = extractUuid(idElement);
-            if (uuidString != null) {
-                String original = gson.toJson(idElement);
-                tooltip.addProperty("id", uuidString);
-                changed = true;
-                logFix(original, uuidString);
-                if (debugLogging) {
-                    getLogger().info(() -> "Normalized legacy hoverEvent UUID " + original + " -> " + uuidString);
-                }
-            }
-        }
-
-        for (Map.Entry<String, JsonElement> entry : tooltip.entrySet()) {
-            if ("id".equals(entry.getKey())) {
+        for (int index = 0; index < modifier.size(); index++) {
+            WrappedChatComponent component = modifier.readSafely(index);
+            if (component == null) {
                 continue;
             }
-            changed |= normalizeElement(entry.getValue());
-        }
 
-        return changed;
-    }
-
-    private String extractUuid(JsonElement element) {
-        if (element == null || element.isJsonNull()) {
-            return null;
-        }
-
-        if (element.isJsonPrimitive()) {
-            JsonPrimitive primitive = element.getAsJsonPrimitive();
-            if (primitive.isString()) {
-                return null;
-            }
-            return null;
-        }
-
-        if (element.isJsonArray()) {
-            JsonArray array = element.getAsJsonArray();
-            if (!convertIntArrayPayloads) {
-                return null;
+            String json = component.getJson();
+            if (json == null || json.isEmpty()) {
+                continue;
             }
 
-            return extractUuidFromIntArray(array);
-        }
-
-        if (element.isJsonObject()) {
-            JsonObject object = element.getAsJsonObject();
-            if (!convertUuidObjectPayloads) {
-                return null;
-            }
-            if (object.has("most") && object.has("least")) {
-                try {
-                    long most = object.get("most").getAsLong();
-                    long least = object.get("least").getAsLong();
-                    return new UUID(most, least).toString();
-                } catch (RuntimeException ignored) {
-                    return null;
-                }
+            String normalized = normalizer.normalize(json, options, fixLogger);
+            if (!Objects.equals(json, normalized)) {
+                modifier.writeSafely(index, WrappedChatComponent.fromJson(normalized));
             }
         }
-
-        return null;
-    }
-
-    private String getString(JsonObject object, String key) {
-        if (object.has(key)) {
-            JsonElement element = object.get(key);
-            if (element.isJsonPrimitive() && element.getAsJsonPrimitive().isString()) {
-                return element.getAsString();
-            }
-        }
-        return null;
-    }
-
-    static String extractUuidFromIntArray(JsonArray array) {
-        int size = array.size();
-        if (size == 4) {
-            long[] parts = new long[4];
-            for (int i = 0; i < 4; i++) {
-                JsonElement part = array.get(i);
-                if (!part.isJsonPrimitive() || !part.getAsJsonPrimitive().isNumber()) {
-                    return null;
-                }
-                parts[i] = part.getAsLong() & 0xFFFFFFFFL;
-            }
-
-            long most = (parts[0] << 32) | parts[1];
-            long least = (parts[2] << 32) | parts[3];
-            return new UUID(most, least).toString();
-        }
-
-        if (size == 16) {
-            byte[] bytes = new byte[16];
-            for (int i = 0; i < 16; i++) {
-                JsonElement part = array.get(i);
-                if (!part.isJsonPrimitive() || !part.getAsJsonPrimitive().isNumber()) {
-                    return null;
-                }
-
-                long value = part.getAsLong();
-                if (value < -128 || value > 255) {
-                    return null;
-                }
-
-                bytes[i] = (byte) (value & 0xFF);
-            }
-
-            ByteBuffer buffer = ByteBuffer.wrap(bytes);
-            long most = buffer.getLong();
-            long least = buffer.getLong();
-            return new UUID(most, least).toString();
-        }
-
-        return null;
     }
 
     private void printBanner() {
-        System.out.println();
+        getLogger().info(" ");
         for (String line : BANNER_LINES) {
-            System.out.println(line);
+            getLogger().info(line);
         }
-        System.out.println();
-    }
-
-    private void logFix(String before, String after) {
-        if (!logFixes || handledErrorsFile == null) {
-            return;
-        }
-        if (!includeOriginalPayload && !includeNormalizedPayload) {
-            return;
-        }
-        writeHandledError(before, after);
-    }
-
-    private void initializeHandledErrorsLog() {
-        File dataFolder = getDataFolder();
-        if (!dataFolder.exists() && !dataFolder.mkdirs()) {
-            getLogger().warning("Unable to create plugin data folder; handled error logging disabled.");
-            handledErrorsFile = null;
-            return;
-        }
-
-        handledErrorsFile = new File(dataFolder, handledErrorsFileName);
-
-        synchronized (handledErrorsLock) {
-            if (!handledErrorsFile.exists() || handledErrorsFile.length() == 0) {
-                try {
-                    DocumentBuilder builder = newDocumentBuilder();
-                    Document document = builder.newDocument();
-                    document.appendChild(document.createElement("handledErrors"));
-                    writeDocument(document);
-                } catch (ParserConfigurationException | TransformerException | IOException ex) {
-                    getLogger().log(Level.WARNING, "Unable to initialize " + handledErrorsFileName, ex);
-                    handledErrorsFile = null;
-                }
-                return;
-            }
-
-            try {
-                DocumentBuilder builder = newDocumentBuilder();
-                Document document;
-                try (FileInputStream inputStream = new FileInputStream(handledErrorsFile)) {
-                    document = builder.parse(inputStream);
-                }
-                if (document.getDocumentElement() == null) {
-                    document.appendChild(document.createElement("handledErrors"));
-                    writeDocument(document);
-                }
-            } catch (Exception ex) {
-                getLogger().log(Level.WARNING, "Failed to verify " + handledErrorsFileName + "; recreating file.", ex);
-                try {
-                    DocumentBuilder builder = newDocumentBuilder();
-                    Document document = builder.newDocument();
-                    document.appendChild(document.createElement("handledErrors"));
-                    writeDocument(document);
-                } catch (ParserConfigurationException | TransformerException | IOException recreateEx) {
-                    getLogger().log(Level.WARNING, "Unable to recreate " + handledErrorsFileName, recreateEx);
-                    handledErrorsFile = null;
-                }
-            }
-        }
-    }
-
-    private void writeHandledError(String before, String after) {
-        if (handledErrorsFile == null) {
-            return;
-        }
-
-        synchronized (handledErrorsLock) {
-            try {
-                DocumentBuilder builder = newDocumentBuilder();
-                Document document;
-                if (handledErrorsFile.exists() && handledErrorsFile.length() > 0) {
-                    try (FileInputStream inputStream = new FileInputStream(handledErrorsFile)) {
-                        document = builder.parse(inputStream);
-                    }
-                } else {
-                    document = builder.newDocument();
-                    document.appendChild(document.createElement("handledErrors"));
-                }
-
-                Element root = document.getDocumentElement();
-                if (root == null) {
-                    root = document.createElement("handledErrors");
-                    document.appendChild(root);
-                }
-
-                Element entry = document.createElement("handledError");
-                entry.setAttribute("timestamp", Instant.now().toString());
-
-                boolean wroteContent = false;
-                if (includeOriginalPayload) {
-                    Element original = document.createElement("original");
-                    original.appendChild(document.createCDATASection(before));
-                    entry.appendChild(original);
-                    wroteContent = true;
-                }
-                if (includeNormalizedPayload) {
-                    Element normalized = document.createElement("normalized");
-                    normalized.appendChild(document.createCDATASection(after));
-                    entry.appendChild(normalized);
-                    wroteContent = true;
-                }
-
-                if (!wroteContent) {
-                    return;
-                }
-
-                root.appendChild(entry);
-
-                writeDocument(document);
-            } catch (Exception ex) {
-                getLogger().log(Level.WARNING, "Unable to write handled error entry to " + handledErrorsFileName, ex);
-            }
-        }
-    }
-
-    private DocumentBuilder newDocumentBuilder() throws ParserConfigurationException {
-        DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
-        factory.setNamespaceAware(true);
-        factory.setIgnoringComments(true);
-        factory.setExpandEntityReferences(false);
-        try {
-            factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
-            factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
-            factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
-            factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
-            factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
-        } catch (ParserConfigurationException ignored) {
-            // If a feature isn't supported, we proceed with the defaults.
-        }
-        try {
-            factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
-            factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
-        } catch (IllegalArgumentException ignored) {
-            // Attributes may not be supported by all parser implementations.
-        }
-        return factory.newDocumentBuilder();
-    }
-
-    private Transformer newTransformer() throws TransformerException {
-        TransformerFactory factory = TransformerFactory.newInstance();
-        try {
-            factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
-            factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
-            factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_STYLESHEET, "");
-        } catch (IllegalArgumentException | TransformerException ignored) {
-            // Some implementations may not support these attributes.
-        }
-        Transformer transformer = factory.newTransformer();
-        transformer.setOutputProperty(OutputKeys.INDENT, "yes");
-        transformer.setOutputProperty(OutputKeys.ENCODING, "UTF-8");
-        transformer.setOutputProperty("{http://xml.apache.org/xslt}indent-amount", "2");
-        return transformer;
-    }
-
-    private void writeDocument(Document document) throws TransformerException, IOException {
-        if (handledErrorsFile == null) {
-            return;
-        }
-
-        Transformer transformer = newTransformer();
-        DOMSource source = new DOMSource(document);
-        try (FileOutputStream outputStream = new FileOutputStream(handledErrorsFile, false)) {
-            StreamResult result = new StreamResult(outputStream);
-            transformer.transform(source, result);
-        }
+        getLogger().info(" ");
     }
 }
