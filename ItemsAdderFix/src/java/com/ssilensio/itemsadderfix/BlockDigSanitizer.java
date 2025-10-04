@@ -55,7 +55,7 @@ final class BlockDigSanitizer {
         }
 
         if (digType == PlayerDigType.START_DESTROY_BLOCK) {
-            return sanitizeBlockStart(position, checker);
+            return sanitizeBlockStart(position, checker, blockPositionProvider);
         }
         if (digType == PlayerDigType.DROP_ITEM
                 || digType == PlayerDigType.DROP_ALL_ITEMS
@@ -65,17 +65,41 @@ final class BlockDigSanitizer {
         return Result.allow();
     }
 
-    private Result sanitizeBlockStart(BlockPosition position, ChunkLoadChecker checker) {
-        if (position == null || checker == null) {
+    private Result sanitizeBlockStart(BlockPosition position,
+                                      ChunkLoadChecker checker,
+                                      BlockPositionProvider provider) {
+        if (position == null) {
             return Result.allow();
         }
 
-        int chunkX = position.getX() >> 4;
-        int chunkZ = position.getZ() >> 4;
+        BlockPosition target = position;
+        boolean replacementApplied = false;
+
+        if (provider != null && (position.getX() | position.getY() | position.getZ()) == 0) {
+            try {
+                BlockPosition candidate = provider.currentBlockPosition();
+                if (candidate != null) {
+                    target = candidate;
+                    replacementApplied = true;
+                }
+            } catch (RuntimeException ex) {
+                // Ignore and fall back to the original position
+            }
+        }
+
+        if (checker == null) {
+            return replacementApplied ? Result.replace(target) : Result.allow();
+        }
+
+        int chunkX = target.getX() >> 4;
+        int chunkZ = target.getZ() >> 4;
         try {
-            return checker.isChunkLoaded(chunkX, chunkZ) ? Result.allow() : Result.cancel();
+            if (!checker.isChunkLoaded(chunkX, chunkZ)) {
+                return Result.cancel();
+            }
+            return replacementApplied ? Result.replace(target) : Result.allow();
         } catch (RuntimeException ex) {
-            return Result.allow();
+            return replacementApplied ? Result.replace(target) : Result.allow();
         }
     }
 
